@@ -1,4 +1,4 @@
-"""Tests for Group 10 headings, route planning, holding and search.
+"""Tests for Group 10 route planning, predator detours, holding and search.
 
 Run with: uv run python -m pytest players/group10/tests
 """
@@ -8,6 +8,7 @@ from math import hypot
 
 import pytest
 
+from core.constants import ZONE_RADIUS
 from core.depth import Depth
 from core.parse_args import parse_args
 from core.runner import build_engine
@@ -19,39 +20,26 @@ SPREAD = [nav.velocity(d, h) for d, h in zip(nav.DEPTHS, (45, 135, 225, 315))]
 NORTHISH = [nav.velocity(d, h) for d, h in zip(nav.DEPTHS, (344, 341, 20, 31))]
 
 
-@pytest.mark.parametrize("memory_size", [8, 15, 16, 1024])
-def test_heading_store_round_trip(memory_size):
-    from players.group10 import dead_reckoning as dr
+def simulate(goal, vels, predator=None, tell=True, max_days=400):
+    """Follow `steer` day by day from the origin.
 
-    layout = dr.layout_for(memory_size)
-    store = nav.heading_store_for(memory_size, layout.num_bytes)
-    memory = bytearray(memory_size)
-    assert store.read(memory) == [None] * 4
-    for d, h in zip(nav.DEPTHS, (0.0, 97.0, 200.0, 359.0)):
-        store.write(memory, d, h)
-    step = 360 / store.sectors
-    for got, want in zip(store.read(memory), (0.0, 97.0, 200.0, 359.0)):
-        err = abs((got - want + 180) % 360 - 180)
-        assert err <= step / 2 + 1e-9
-    # Dead-reckoning bytes are untouched.
-    assert memory[: layout.num_bytes] == bytearray(layout.num_bytes)
-
-
-def test_no_heading_store_below_8_bytes():
-    assert nav.heading_store_for(7, 6) is None
-
-
-def simulate(goal, vels, max_days=400):
-    """Follow `steer` day by day; return (days taken, final distance)."""
-    x, y = 0.0, 0.0
+    Returns (days taken, final distance, days started inside the predator
+    zone). `predator` is a fixed point relative to the start; with
+    `tell=False` exposure is counted but the planner is not told about it.
+    """
+    x, y, exposed = 0.0, 0.0, 0
     for day in range(max_days):
         rel = (nav._wrap(goal[0] - x), nav._wrap(goal[1] - y))
         if hypot(*rel) < 25:
-            return day, hypot(*rel)
-        depth = nav.steer(rel, vels)
+            return day, hypot(*rel), exposed
+        pred = None
+        if predator is not None:
+            pred = (nav._wrap(predator[0] - x), nav._wrap(predator[1] - y))
+            exposed += hypot(*pred) < ZONE_RADIUS
+        depth = nav.steer(rel, vels, pred if tell else None, nav.phase(day))
         vx, vy = vels[depth]
         x, y = x + vx, y + vy
-    return max_days, hypot(*rel)
+    return max_days, hypot(*rel), exposed
 
 
 @pytest.mark.parametrize("vels", [SPREAD, NORTHISH], ids=["spread", "northish"])
@@ -59,11 +47,10 @@ def test_steer_reaches_random_goals(vels):
     rng = random.Random(0)
     for _ in range(50):
         goal = (rng.uniform(-500, 500), rng.uniform(-500, 500))
-        days, dist = simulate(goal, vels)
+        days, dist, _ = simulate(goal, vels)
         assert dist < 25, f"stuck {dist:.0f} km from {goal}"
         # Never much slower than the planner's own estimate.
-        _, est = nav.plan(goal, vels)
-        assert days <= est + 5
+        assert days <= nav.plan(goal, vels).days + 5
 
 
 def test_plan_uses_torus_wrap():
@@ -71,6 +58,31 @@ def test_plan_uses_torus_wrap():
     # we go north around the torus.
     route = nav.plan((0.0, 100.0), NORTHISH)
     assert route is not None
+
+
+def test_route_detours_around_predator():
+    # Goal due east; the predator zone sits right on the straight line.
+    goal, predator = (500.0, 0.0), (250.0, 0.0)
+    _, _, straight = simulate(goal, SPREAD, predator, tell=False)
+    _, dist, exposed = simulate(goal, SPREAD, predator)
+    assert dist < 25
+    assert straight > 0 and exposed < straight / 2
+
+
+def test_predator_off_route_changes_nothing():
+    goal = (500.0, 0.0)
+    far = (0.0, 500.0)
+    assert nav.plan(goal, SPREAD, far) == nav.plan(goal, SPREAD)
+
+
+@pytest.mark.parametrize("vels", [SPREAD, NORTHISH], ids=["spread", "northish"])
+def test_steer_with_predator_still_arrives(vels):
+    rng = random.Random(2)
+    for _ in range(30):
+        goal = (rng.uniform(-500, 500), rng.uniform(-500, 500))
+        predator = (rng.uniform(-500, 500), rng.uniform(-500, 500))
+        _, dist, _ = simulate(goal, vels, predator)
+        assert dist < 25
 
 
 def test_hold_stays_near_point():

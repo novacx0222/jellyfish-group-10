@@ -1,5 +1,5 @@
 import random
-from math import cos, sin, tau
+from math import cos, hypot, sin, tau
 
 from core.action import Action
 from core.constants import OCEAN_SIZE
@@ -13,8 +13,9 @@ from players.group10 import dead_reckoning, navigation
 class Player10(Player):
     """Group 10's jellyfish.
 
-    With 8+ bytes of memory it navigates by its dead-reckoning chart
-    (`dead_reckoning.py`) and the stored current headings (`navigation.py`):
+    With 8+ bytes of memory it keeps a chart in memory (`dead_reckoning.py`:
+    position, zone points, predator centre, current headings) and navigates
+    by it (`navigation.py`):
 
     1. Original jellyfish spend their first days visiting each depth once to
        learn the four current headings. Offspring inherit them.
@@ -23,7 +24,8 @@ class Player10(Player):
        the feeding zone for summer).
     3. Inside the goal zone: hold position at the stored hold point (first
        the estimated centre). If that spot is in the predator zone, the hold
-       point moves. Outside: ride the fastest mix of currents toward it.
+       point moves away from it. Outside: ride the mix of currents toward it
+       that best trades travel time against days in the predator zone.
     4. Goal zone never seen: lawnmower search (`navigation.sweep`).
 
     With less memory it falls back to sense-only rules (`_sense_only`).
@@ -43,55 +45,70 @@ class Player10(Player):
 
     def __init__(self, memory_size: int, lifetime_days: int, rng: random.Random):
         super().__init__(memory_size, lifetime_days, rng)
-        # Both depend only on the memory size, never on a particular jellyfish.
+        # Depends only on the memory size, never on a particular jellyfish.
         self.layout = dead_reckoning.layout_for(memory_size)
-        self.headings = (
-            navigation.heading_store_for(memory_size, self.layout.num_bytes)
-            if self.layout is not None
-            else None
-        )
 
     def act(self, snapshot: JellyfishSnapshot) -> Action:
         if self.layout is None:
             return self._sense_only(snapshot)
-        chart = dead_reckoning.update(snapshot, self.layout)
-        if self.headings is None:
-            return self._sense_only(snapshot)
+        chart = dead_reckoning.decode(snapshot.memory, self.layout)
+        dead_reckoning.update(chart, snapshot, self.layout)
+        action = self._navigate(snapshot, chart)
+        dead_reckoning.encode(chart, snapshot.memory, self.layout)
+        return action
 
-        unseen = navigation.learn(snapshot, self.headings)
-        if unseen is not None:
-            return Action(unseen)
-        vels = navigation.known_velocities(
-            snapshot, self.headings.read(snapshot.memory)
-        )
+    def _navigate(self, s: JellyfishSnapshot, chart: dead_reckoning.Chart) -> Action:
+        # An original rides one depth deeper each day for its first four
+        # days, recording each current's heading. Offspring inherit them.
+        known = dead_reckoning.headings_known(s)
+        if known < 4:
+            chart.set_heading(s.depth, s.heading, self.layout)
+            if known < 3:
+                return Action(Depth(known + 1))
+        vels = self._velocities(s, chart)
 
-        zone, inside = self._goal(snapshot)
+        zone, inside = self._goal(s)
         vector = chart.vector_to(zone, self.layout)
         if vector is None:
-            return Action(self._search(snapshot, vels))
+            return Action(self._search(s, vels))
+        predator = chart.vector_to(dead_reckoning.PREDATOR, self.layout)
         if inside:
-            if snapshot.in_predator_zone and self.RELOCATE_KM > 0:
-                vector = self._relocate(snapshot, chart, zone)
+            if s.in_predator_zone and self.RELOCATE_KM > 0:
+                vector = self._relocate(chart, zone, predator)
             return Action(navigation.hold(vector, vels))
-        depth = navigation.steer(vector, vels)
-        return Action(depth if depth is not None else self._search(snapshot, vels))
+        day_phase = navigation.phase((s.year - 1) * 360 + s.day_of_year)
+        depth = navigation.steer(vector, vels, predator, day_phase, s.depth)
+        return Action(depth if depth is not None else self._search(s, vels))
+
+    def _velocities(self, s: JellyfishSnapshot, chart) -> list[tuple[float, float]]:
+        """Velocity of every current; today's is exact, the rest from memory."""
+        vels = chart.velocities(self.layout)
+        vels[s.depth] = s.velocity
+        return vels
 
     def _relocate(
-        self, s: JellyfishSnapshot, chart: dead_reckoning.Chart, zone: str
+        self,
+        chart: dead_reckoning.Chart,
+        zone: str,
+        predator: tuple[float, float] | None,
     ) -> tuple[float, float]:
         """Move the stored hold point: this spot is inside the predator zone.
 
-        We cannot afford to remember where the predator zone is, so the hold
-        point takes a random step. The in/out corrections keep it inside the
-        goal zone, and once it lands on a safe spot it stops moving. Offspring
-        inherit the safe spot.
+        The point steps away from the estimated predator centre (randomly if
+        that is unknown or right here). The in/out corrections keep it inside
+        the goal zone, and once it lands on a safe spot it stops moving.
+        Offspring inherit the safe spot.
         """
+        hx, hy = chart.vector_to(zone, self.layout)
+        dx, dy = (hx - predator[0], hy - predator[1]) if predator else (0.0, 0.0)
+        norm = hypot(dx, dy)
+        if norm < 1.0:
+            angle = self.rng.uniform(0, tau)
+            dx, dy, norm = cos(angle), sin(angle), 1.0
         cx, cy = chart.zones[zone]
-        angle = self.rng.uniform(0, tau)
-        cx += self.RELOCATE_KM * cos(angle)
-        cy += self.RELOCATE_KM * sin(angle)
+        cx += self.RELOCATE_KM * dx / norm
+        cy += self.RELOCATE_KM * dy / norm
         chart.zones[zone] = (cx % OCEAN_SIZE, cy % OCEAN_SIZE)
-        dead_reckoning.encode(chart, s.memory, self.layout)
         return chart.vector_to(zone, self.layout)
 
     def _goal(self, s: JellyfishSnapshot) -> tuple[str, bool]:
