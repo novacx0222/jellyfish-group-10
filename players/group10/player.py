@@ -1,8 +1,11 @@
+import random
+
 from core.action import Action
 from core.depth import Depth
 from core.player import Player
 from core.seasons import Season
 from core.snapshot import JellyfishSnapshot
+from players.group10 import dead_reckoning
 
 
 class Player10(Player):
@@ -17,7 +20,9 @@ class Player10(Player):
        a. go fast if there is a zone wanted to be in (e.g. feeding zone during summer)
        b. otherwise rng pick between fast and cruise to explore.
 
-    It never reads or writes `snapshot.memory` yet.
+    Every day it also updates its dead-reckoning chart in memory (own
+    position plus feeding / breeding centre estimates, see
+    `dead_reckoning.py`). The rules above do not use the chart yet.
     """
 
     ESCAPE = Depth.SURFACE  # 40 km/day
@@ -30,7 +35,15 @@ class Player10(Player):
     FEEDING_SEASONS = (Season.SPRING, Season.SUMMER)
     BREEDING_SEASONS = (Season.FALL, Season.WINTER)
 
+    def __init__(self, memory_size: int, lifetime_days: int, rng: random.Random):
+        super().__init__(memory_size, lifetime_days, rng)
+        # None when memory is too small; the rules below then run on senses only.
+        self.layout = dead_reckoning.layout_for(memory_size)
+
     def act(self, snapshot: JellyfishSnapshot) -> Action:
+        if self.layout is not None:
+            dead_reckoning.update(snapshot, self.layout)
+
         if snapshot.in_predator_zone:
             return Action(self.ESCAPE)
 
