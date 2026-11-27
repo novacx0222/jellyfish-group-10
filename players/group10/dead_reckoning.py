@@ -25,8 +25,8 @@ Two layouts, picked by memory size:
     6..15       9         7        6      1.95 km       7.8 km
     16+        16        12       11      0.015 km      0.24 km
 
-With 8 bytes, bytes 6..7 stay free for later features. Below 6 bytes dead
-reckoning is disabled.
+Current headings are stored right after these fields (see navigation.py).
+Below 6 bytes dead reckoning is disabled.
 
 Rounding: a current's per-day drift is a fixed fraction of a cell, so plain
 rounding would add the same error every day and the estimate would walk away.
@@ -40,9 +40,12 @@ Zone-centre estimates:
   original jellyfish that starts inside the breeding zone uses its birth point.
 - Every later day: if "inside the zone?" contradicts the estimate (inside
   but the estimate is more than R away, or outside but less than R), move
-  the estimate along the line to us until it is consistent again. The idea
-  of correcting a centre from in/out readings comes from Group 5's player;
-  this frame, layout, dither and update rule are our own implementation.
+  the estimate along the line to us until it is consistent again. If we are
+  outside but almost on top of the estimate, that line is noise; we most
+  likely just stepped out, so the estimate goes back along our last drift.
+
+The idea of correcting a centre from in/out readings comes from Group 5's
+player; this frame, layout, dither and update rule are our own implementation.
 """
 
 from __future__ import annotations
@@ -236,9 +239,10 @@ def _observe(
         target = ZONE_RADIUS - _MARGIN_KM
     elif not inside and dist < ZONE_RADIUS:
         target = ZONE_RADIUS + _MARGIN_KM
-        if dist == 0:
-            # Sitting on the old estimate yet outside: push it back along
-            # the way we came, since we just left through that side.
+        if dist < ZONE_RADIUS / 2 and not first_turn:
+            # Outside, yet close to the estimate: the direction to it is
+            # mostly noise. We most likely just stepped out of the zone, so
+            # the centre is behind us: push it back along the way we came.
             vx, vy = s.velocity
             speed = hypot(vx, vy)
             if speed == 0:
