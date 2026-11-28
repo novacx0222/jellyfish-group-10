@@ -1,0 +1,34 @@
+run: uv run main.py --players -J 100 -S 205 -T 1800 -M 1024 --seed 95527 --max_population 10000000 
+
+group           final   peak  births  eaten   old  10J day  100J day  time(s)
+Group 1           178    178     296    218     0        -         -    0.188
+
+
+
+group           final   peak  births  eaten   old  10J day  100J day  time(s)
+Group 3         16370  16408   16948    678     0      992      1712  467.408
+
+group           final   peak  births  eaten   old  10J day  100J day  time(s)
+Group 4            15    100       0     85     0        -         -    0.618
+
+group           final   peak  births  eaten   old  10J day  100J day  time(s)
+Group 5          6997   6997    9623   2726     0      996         -  132.398
+
+group           final   peak  births  eaten   old  10J day  100J day  time(s)
+Group 6             0    100     100    200     0        -         -    0.112
+
+group           final   peak  births  eaten   old  10J day  100J day  time(s)
+Group 7             0    100       0    100     0        -         -    0.512
+
+group           final   peak  births  eaten   old  10J day  100J day  time(s)
+Group 8          5620   7363    8713   3193     0      992         -  203.768
+
+group           final   peak  births  eaten   old  10J day  100J day  time(s)
+Group 9           130    130     148    118     0        -         -    9.752
+
+group           final   peak  births  eaten   old  10J day  100J day  time(s)
+Group 10          171    262     831    760     0        -         -    0.347
+
+group           final   peak  births  eaten   old  10J day  100J day  time(s)
+Example             0    100       0    100     0        -         -    0.049
+########################################################################
