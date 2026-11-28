@@ -39,6 +39,10 @@ class Player10(Player):
     # How far the hold point jumps when it turns out to be in the predator zone.
     RELOCATE_KM = 40.0
 
+    # Chance per day of riding a random depth instead of the planned one.
+    # 0.02 cost no speed over seeds 1-48; 0.05+ delayed 10x growth by a year.
+    EXPLORE_PROB = 0.02
+
     # Slow down when the zone is open or about to open.
     FEEDING_SEASONS = (Season.SPRING, Season.SUMMER)
     BREEDING_SEASONS = (Season.FALL, Season.WINTER)
@@ -65,6 +69,13 @@ class Player10(Player):
             chart.set_heading(s.depth, s.heading, self.layout)
             if known < 3:
                 return Action(Depth(known + 1))
+        # Bet hedging: a parent and its offspring share memory and position,
+        # so without this a whole lineage makes every decision together, and
+        # one wrong chart or route dooms it all. An occasional random depth
+        # spreads them out. The chart stays right: it integrates the actual
+        # drift (`s.velocity`), not the depth we chose.
+        if self.rng.random() < self.EXPLORE_PROB and not s.in_predator_zone:
+            return Action(self.rng.choice(tuple(Depth)))
         vels = self._velocities(s, chart)
 
         zone, inside = self._goal(s)
